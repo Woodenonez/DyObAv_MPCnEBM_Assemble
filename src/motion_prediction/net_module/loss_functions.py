@@ -1,238 +1,73 @@
-import sys
+import os, sys
 import math
 
 import torch
-from motion_prediction.net_module import module_wta
+import matplotlib.pyplot as plt
 
-def meta_loss(hypos, M, labels, loss, k_top=1, relax=0): # for batch per step
-    # relax=0, k_top=1 -> WTA
-    # relax>0, k_top=1 -> Relaxed WTA
-    # relax=0, k_top=n -> Evolving WTA
-    assert((relax>=0)&(k_top>=0)), ('All parameters must be non-negative.')
-    assert((relax<1)), ('Parameters exceed limits.')
-    k_top = min(k_top, M)
+def get_weight(grid, index, sigma, rho=0):
+    # grid is BxTxHxW
+    # index is B x pair of numbers
+    # return weight in 
+    bs = grid.shape[0]
+    T = index.shape[1]
+    index = index[:,:,:,None,None]
 
-    hy = hypos  # tensor - Mx[BxC] - [ts[1,..,C*M],...,ts[1,..,C*M]]
-    gt = labels # tensor - BxC
+    if not isinstance(sigma, (tuple, list)):
+        sigma = (sigma, sigma)
+    sigma_x, sigma_y = sigma[0], sigma[1]
+    x = torch.arange(0, grid.shape[1], device=grid.device)
+    y = torch.arange(0, grid.shape[2], device=grid.device)
+    try:
+        x, y = torch.meshgrid(x, y, indexing='ij')
+    except:
+        x, y = torch.meshgrid(x, y)
+    x, y = x.unsqueeze(0).repeat(bs,T,1,1), y.unsqueeze(0).repeat(bs,T,1,1)
+    in_exp = -1/(2*(1-rho**2)) * ((x-index[:,:,1])**2/(sigma_x**2) 
+                                + (y-index[:,:,0])**2/(sigma_y**2) 
+                                - 2*rho*(x-index[:,:,0])/(sigma_x)*(y-index[:,:,1])/(sigma_y))
+    z = 1/(2*math.pi*sigma_x*sigma_y*math.sqrt(1-rho**2)) * torch.exp(in_exp)
+    weight = z/(z.amax(dim=(2,3))[:,:,None,None])
+    weight[weight<0.1] = 0
+    return weight
 
-    hyM = module_wta.disassemble(hy, M) # BxMxC
-    # gts = torch.stack([gt for _ in range(M)], axis=1)
-    gts = gt.repeat(1, M, 1)
-
-    D = loss(hyM, gts) # BxM
-
-    if   (relax==0) & (k_top==1): # meta-loss
-        sum_loss = torch.mean(torch.min(D,dim=1).values)   
-    elif (relax >0) & (k_top==1): # relaxed meta-loss
-        sum_loss = (1-2*relax) * torch.mean(torch.min(D,dim=1).values)
-        for i in range(M):
-            sum_loss += relax/(M-1) * torch.mean(D[:,i])
-    elif (relax==0) & (k_top >1): # envolving meta-loss
-        sum_loss = 0
-        topk = torch.topk(D, k_top, dim=1, largest=False, sorted=False).values # BxM
-        for i in range(k_top):
-            sum_loss += torch.mean(topk[:,i])
-        sum_loss /= k_top
-    else:
-        raise ModuleNotFoundError('The mode is unkonwn. Check the parameters.')
-    return sum_loss
-
-def ameta_loss(hypos, M, labels, loss, k_top): # for batch per step
+def loss_nll(data, label, inputs, sigma:int=20, l2_factor:float=0.0):
+    r'''
+    data is the energy grid, label should be the index (i,j) meaning which grid to choose
+    :data  - BxCxHxW
+    :label - BxTxDo,   T:pred_len, Do: output dimension
     '''
-    Do a "clustering" for computing the loss
-    '''
-    hy = hypos  # tensor - Mx[BxC] - [ts[1,..,C*M],...,ts[1,..,C*M]]
-    gt = labels # tensor - BxC
-    hyM = module_wta.disassemble(hy, M) # BxMxC
-    # gts = torch.stack([gt for _ in range(M)], axis=1)
-    gts = gt.repeat(1, M, 1)
 
-    D = loss(hyM, gts) # BxM
+    weight = get_weight(data[:,0], label, sigma=sigma) # Gaussian fashion [BxTxHxW]
 
-    if k_top <= 1: # NOTE adaptive
-        Dmin = torch.min(D, dim=1).values
-        Dmax = torch.max(D, dim=1).values
-        Dthre = Dmin + 0.1 * (Dmax - Dmin)
-        A = D<=Dthre.reshape(-1,1)
-        DA = D*A
+    # XXX
+    # print(f'Input size: {inputs.shape}; Energy grid size: {data.shape}; Weight grid size: {weight.shape}')
+    # _, axes = plt.subplots(4,4)
+    # axes[0,0].imshow(inputs[0,0].detach().cpu())
+    # axes[0,1].imshow(inputs[0,1].detach().cpu())
+    # axes[0,2].imshow(inputs[0,2].detach().cpu())
+    # axes[0,3].imshow(inputs[0,3].detach().cpu())
+    # axes[1,0].imshow(inputs[0,4].detach().cpu())
+    # axes[1,1].imshow(inputs[0,5].detach().cpu())
+    # axes[1,2].imshow(inputs[0,6].detach().cpu())
+    # axes[1,3].imshow(inputs[0,7].detach().cpu())
+    # axes[2,0].imshow(inputs[0,8].detach().cpu())
+    # axes[2,1].imshow(inputs[0,9].detach().cpu())
 
-    if k_top == 0:
-        Dmin = torch.min(D, dim=1).values
-        Dmax = torch.max(D, dim=1).values
-        Dthre = Dmin + 0.1 * (Dmax - Dmin)
-        A = D<=Dthre.reshape(-1,1)
-        D = torch.tile(Dmin.reshape(-1,1), (1,M))
-        DA = D*A
-
-    sum_loss = 0
-    if k_top > 1:
-        topk = torch.topk(D, k_top, dim=1, largest=False, sorted=False).values # BxM
-        for i in range(k_top):
-            sum_loss += torch.mean(topk[:,i])
-        sum_loss /= k_top
-    else: # k=0 or 1
-        for i in range(M):
-            sum_loss += torch.mean(DA[:,i])
-        sum_loss /= M
-
-    return sum_loss
-
-def output2mdn(outputs, M, labels, loss, k_top=None):
-    alp, mu, sigma = outputs[0], outputs[1], outputs[2]
-    return loss(alp, mu, sigma, labels)
-
-# XXX Overhaul version [deprecated]
-def bmeta_loss(hypos, M, labels, loss, k_top, overhaul=False):
-    '''
-    Newly including "overhaul" and "pre-check"
-    Here the "M" is actually "K"
-    1. k>1, (pre-check) + stablization + overhaul + decay k
-    2. k=1, adaptive update,like bmeta
-    '''
+    # axes[2,2].imshow(data[0,0].detach().cpu())
+    # axes[2,3].imshow(weight[0,0].detach().cpu())
+    # axes[2,3].plot(label.cpu()[0,0,0],label.cpu()[0,0,1],'rx')
     
-    hy = hypos  # tensor - Mx[BxC] - [ts[1,..,C*M],...,ts[1,..,C*M]]
-    gt = labels # tensor - BxC
+    # plt.show()
+    # XXX
 
-    hyM = module_wta.disassemble(hy, M) # BxMxC
-    gts = torch.stack([gt for _ in range(M)], axis=1)
+    numerator_in_log   = torch.logsumexp(-data+torch.log(weight), dim=(2,3))
+    denominator_in_log = torch.logsumexp(-data, dim=(2,3))
 
-    D = loss(hyM, gts) # BxM
-
-    if k_top == 1:
-        Dmin = torch.min(D, dim=1).values
-        Dmax = torch.max(D, dim=1).values
-        Dthre = Dmin + 0.1 * (Dmax - Dmin)
-        A = D<=Dthre.reshape(-1,1)
-        DA = D*A
-
-    sum_loss = 0
-    if k_top > 1:
-        topk = torch.topk(D, k_top, dim=1, largest=False, sorted=False).values # BxM
-        if overhaul: # overhaul
-            topk_thre = (torch.max(topk, dim=1).values + torch.min(topk, dim=1).values) / 2
-            for i in range(len(topk_thre)):
-                topk_batch = topk[i,:]
-                equilibrium = topk_batch[topk_batch>=topk_thre[i]]
-                half_equilibrium = torch.topk(equilibrium, (len(equilibrium)+1)//2, largest=False, sorted=False).values
-                sum_loss += (torch.sum(topk_batch[topk_batch<topk_thre[i]]) + torch.sum(half_equilibrium)) / k_top
-            sum_loss /= len(topk_thre)
-        else: # stabilization
-            sum_loss = torch.sum(torch.mean(topk, dim=0))
-            sum_loss /= k_top
-    else: # adaptive
-        # relax = 0.1
-        sum_loss = torch.sum(torch.mean(DA, dim=0))
-        # sum_loss = (1-2*relax) * torch.mean(torch.min(DA,dim=1).values)
-        # for i in range(M):
-        #     sum_loss += relax/(M-1) * torch.mean(D[:,i])
-        sum_loss /= M
-
-    return sum_loss
-
-# XXX Confidence version [deprecated]
-def lmeta_loss(hypos, M, labels, loss, k_top):
-    hy_withc = hypos  # tensor - Mx[BxC] - [ts[1,..,C*M],...,ts[1,..,C*M]]
-    gt = labels # tensor - BxC
-    sfx = torch.nn.Softmax(dim=1)
-    kld = torch.nn.KLDivLoss(reduction='batchmean')
-
-    hyM_withc = module_wta.disassemble(hy_withc, M) # BxMxC
-    gts = torch.stack([gt for _ in range(M)], axis=1)
-
-    hyM = hyM_withc[:,:,:-1]
-    hyC = hyM_withc[:,:,-1]
-
-    D  = loss(hyM, gts) # BxM
-    C = sfx(D)
-
-    sum_loss = 0
-    if k_top > 1:
-        topk = torch.topk(D, k_top, dim=1, largest=False, sorted=False).values # BxM
-        for i in range(k_top):
-            sum_loss += torch.mean(topk[:,i])
-        sum_loss /= k_top
-    else: # k=0 or 1
-        sum_loss = torch.mean(torch.min(D,dim=1).values)
-
-    sum_loss += kld(hyC.log(), C) # (C * (C / hyC).log()).sum(dim=1).mean()
-
-    return sum_loss
-
-def cal_GauProb(mu, sigma, x):
-    """
-    Arguments:
-        mu    (BxMxC) - The means of the Gaussians. 
-        sigma (BxMxC) - The standard deviation of the Gaussians.
-        x     (BxC)   - A batch of data points (coordinates of position).
-
-    Return:
-        probabilities (BxM): probability of each point in the probability
-             distribution with the corresponding mu/sigma index.
-            (Assume the dimensions of the output are independent to each other.)
-    """
-    x = x.unsqueeze(1).expand_as(mu) # BxC -> Bx1xC -> BxMxC
-    prob = torch.rsqrt(torch.tensor(2*math.pi)) * torch.exp(-((x-mu)/sigma)**2 / 2) / sigma
-    return torch.prod(prob, dim=2) # overall probability for all output's dimensions in each component, BxM
-
-def cal_multiGauProb(alp, mu, sigma, x):
-    '''
-    Description:
-        Return the probability of "data" given MoG parameters "mu" and "sigma".
-    Arguments:
-        (same as 'loss_NLL')
-    Return:
-        prob (Bx1) - The probability of each point in the distribution in the corresponding mu/sigma index.
-    '''
-    prob = alp * cal_GauProb(mu, sigma, x) # BxG
-    prob = torch.sum(prob, dim=1) # Bx1, overall prob for each batch (sum is for all compos)
-    return prob
-
-
-def loss_NLL(alp, mu, sigma, data):
-    '''
-    Description:
-        Calculates the negative log-likelihood loss.
-    Arguments:
-        alp   (BxM)   - Component's weight.
-        mu    (BxMxC) - The means of the Gaussians. 
-        sigma (BxMxC) - The standard deviation of the Gaussians.
-        data  (BxC)   - A batch of data points.
-    Return:
-        NLL <value> - The negative log-likelihood loss.
-    '''
-    alp = alp/torch.sum(alp, dim=1) #normalization
-    nll = -torch.log(cal_multiGauProb(alp, mu, sigma, data)) 
+    l2 = torch.sum(torch.pow(data,2),dim=(2,3)) / (data.shape[2]*data.shape[3])
+    nll = - numerator_in_log + denominator_in_log + l2_factor*l2
+    if len(label.shape) == 3:
+        nll = torch.sum(nll, dim=1)
     return torch.mean(nll)
-
-def loss_MaDist(alp, mu, sigma, data):
-    '''
-    Description:
-        Calculates the weighted Mahalanobis distance.
-    Arguments:
-        alp   (BxG)   - Component's weight.
-        mu    (BxGxC) - The means of the Gaussians. 
-        sigma (BxGxC) - The standard deviation of the Gaussians.
-        data  (BxC)   - Batches of data points.
-    Return:
-        MD  <list>  - The MD of each component.
-        WMD <value> - The weighted MD.
-    '''
-    alp = alp/torch.sum(alp, dim=1) #normalization
-    mu0 = (data.expand_as(mu)-mu) # (x-mu)
-    S_inv_1 = 1/sigma[:,:,0] # S^-1 inversed covariance matrix
-    S_inv_2 = 1/sigma[:,:,1]
-    md = torch.sqrt( S_inv_1*mu0[:,:,0]**2 + S_inv_2*mu0[:,:,1]**2 ) # BxG
-    return md, torch.sum(md*alp, dim=1)
-
-def loss_CentralOracle(mu, data):
-    '''
-    Arguments:
-        mu    (BxGxC) - The means of the Gaussians. 
-        data  (BxC)   - Batches of data points.
-    '''
-    mse = torch.sum((mu - data.expand_as(mu))**2, dim=2) # BxG
-    return torch.min(mse, dim=1).values
-
 
 def loss_mse(data, labels): # for batch
     # data, labels - BxMxC
@@ -255,13 +90,60 @@ def loss_mae(data, labels): # for batch
     loss = abs_sum/data.shape[0] # BxM
     return loss
 
-def loss_nll(data, labels):
-    # data, labels - BxMxC
-    # data: For each batch [[x,y,sx,sy],[x,y,sx,sy],...]
-    mu = data[:,:,:2]
-    sigma = data[:,:,2:]
-    nll = -torch.log(cal_GauProb(mu, sigma, labels) + 1e-6) # BxM
-    return nll
+if __name__ == '__main__':
+    import numpy as np
+    from pathlib import Path
+    from torchvision import transforms
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    from data_handle.data_handler import ToTensor, Rescale
+    from data_handle.data_handler import ImageStackDataset, DataHandler
 
+    project_dir = Path(__file__).resolve().parents[2]
+    data_dir = os.path.join(project_dir, 'Data/MAD_1n1e')
+    csv_path = os.path.join(project_dir, 'Data/MAD_1n1e/all_data.csv')
+    composed = transforms.Compose([Rescale((200,200), tolabel=False), ToTensor()])
+    dataset = ImageStackDataset(csv_path=csv_path, root_dir=data_dir, channel_per_image=1, transform=composed, T_channel=False)
+    myDH = DataHandler(dataset, batch_size=2, shuffle=False, validation_prop=0.2, validation_cache=5)
 
+    img   = torch.cat((dataset[0]['image'].unsqueeze(0), dataset[1]['image'].unsqueeze(0)), dim=0) # BxCxHxW
+    label = torch.cat((dataset[0]['label'].unsqueeze(0), dataset[1]['label'].unsqueeze(0)), dim=0)
+    print(img.shape)
+    print(label)
 
+    x_grid = np.arange(0, 201, 8)
+    y_grid = np.arange(0, 201, 8)
+    
+    px_idx = convert_coords2px(label, 10, 10, img.shape[3], img.shape[2])
+    print('Pixel index:', px_idx)
+    cell_idx = convert_px2cell(px_idx, x_grid, y_grid) # (xmin ymin xmax ymax)
+    print('Cell index:', cell_idx)
+
+    ### Random grid
+    grid = torch.ones((2,1,25,25)) # BxCxHxW
+    grid[0,0,17,12] = 0
+    loss = loss_nll(data=grid, label=cell_idx)
+    print('Loss:', loss)
+
+    ### Visualization
+    fig, axes = plt.subplots(2,2)
+    (ax1,ax3,ax2,ax4) = (axes[0,0],axes[0,1],axes[1,0],axes[1,1])
+
+    ax1.imshow(img[0,0,:,:], cmap='gray')
+    ax1.plot(px_idx[0,0], px_idx[0,1], 'rx')
+    ax1.set_xticks(x_grid)
+    ax1.set_yticks(y_grid)
+    ax1.grid(linestyle=':')
+
+    ax2.imshow(grid[0,0,:,:], cmap='gray')
+    ax2.plot(cell_idx[0,0], cell_idx[0,1], 'rx')
+
+    ax3.imshow(img[1,0,:,:], cmap='gray')
+    ax3.plot(px_idx[1,0], px_idx[1,1], 'rx')
+    ax3.set_xticks(x_grid)
+    ax3.set_yticks(y_grid)
+    ax3.grid(linestyle=':')
+
+    ax4.imshow(grid[1,0,:,:], cmap='gray')
+    ax4.plot(cell_idx[1,0], cell_idx[1,1], 'rx')
+
+    plt.show()
