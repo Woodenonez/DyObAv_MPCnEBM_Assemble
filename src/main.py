@@ -7,21 +7,23 @@ from timeit import default_timer as timer
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-from mpc_planner.util import utils_plot
+from blk_mpc_planner.util_mpc import utils_plot
 
 from main_pre import prepare_map, prepare_params
-from motion_prediction.mmp_interface import MmpInterface
-from motion_prediction.util import utils_test
-from mpc_planner.mpc_interface import MpcInterface
+from blk_motion_prediction.mmp_interface import MmpInterface
+from blk_motion_prediction.util_mp import utils_test
+from blk_mpc_planner.mpc_interface import MpcInterface
 
-from util import mapnet
-from util import basic_agent
-from util.basic_objclass import *
+from blk_basic_map import mapnet
+from blk_util import basic_agent
+from blk_util import utils_geo
+from blk_util.basic_object import *
 
 MAX_SIM_TIME = 1_000
 
 ### Global custom
-CONFIG_FILE = 'global_setting_warehouse.yml'
+# CONFIG_FILE = 'global_setting_warehouse.yml'
+CONFIG_FILE = 'global_setting_assemble.yml'
 
 ROBOT_START_POINT = np.array([160, 210, math.pi/2]) # XXX Sim world coords
 
@@ -51,8 +53,8 @@ HUMAN_VMAX = 1.5
 HUMAN_STAGGER = 0.5
 
 ### Coodinate transformation to real world (ROS world)
-ct2real = CoordTransform(scale=SCALE2REAL, offsetx_after=CORNER_COORDS[0], offsety_after=CORNER_COORDS[1], 
-                         y_reverse=~IMAGE_AXIS, y_max_before=SIM_HEIGHT)
+ct2real = utils_geo.CoordTransform(scale=SCALE2REAL, offsetx_after=CORNER_COORDS[0], offsety_after=CORNER_COORDS[1], 
+                                   y_reverse=~IMAGE_AXIS, y_max_before=SIM_HEIGHT)
 map_extent = (CORNER_COORDS[0], CORNER_COORDS[0]+SIM_WIDTH*SCALE2REAL,
               CORNER_COORDS[1], CORNER_COORDS[1]+SIM_HEIGHT*SCALE2REAL)
 
@@ -79,7 +81,7 @@ path_nx_list = [path_nx_a, path_nx_b]
 # path_nx_list = [path_nx_a]
 # path_nx_list = [path_nx_b]
 
-path_list = [Path([Node(list(ct2real(np.array(x)))) for x in path_nx()]) for path_nx in path_nx_list]
+path_list = [PathNodeList([PathNode(list(ct2real(np.array(x)))) for x in path_nx()]) for path_nx in path_nx_list]
 for the_human, the_path in zip(human_list, path_list):
     the_human.set_path(the_path)
 
@@ -102,8 +104,8 @@ ax.set_ylabel('Y [m]', fontsize=15)
 
 _, backup_paths_nx = the_planner.k_shortest_paths(source=13, target=8, k=1)
 base_path_nx = backup_paths_nx[0]
-base_path = Path([Node(list(ct2real(np.array(x)))) for x in base_path_nx()])
-# base_path = Path([Node(1,0,0), Node(1,8,0), Node(8,8,0)]) # XXX
+base_path = PathNodeList([PathNode(list(ct2real(np.array(x)))) for x in base_path_nx()])
+# base_path = PathNodeList([PathNode(1,0,0), Node(1,8,0), Node(8,8,0)]) # XXX
 
 ### Rescale for MPC
 geo_map_rescale = scene_graph.base_map.get_geometric_map()
@@ -129,10 +131,10 @@ for kt in range(MAX_SIM_TIME):
 
     ### Motion prediction
     start_time = timer()
-    past_traj_NN = Trajectory([Node(list(ct2real(np.array(x),False))) for x in human_list[0].past_traj()])
+    past_traj_NN = TrajectoryNodeList([PathNode(list(ct2real(np.array(x),False))) for x in human_list[0].past_traj()])
     hypos_list_all = motion_predictor.get_motion_prediction(past_traj_NN, ref_map, PRED_OFFSET, SCALE2NN, batch_size=5)
     for human in human_list[1:]:
-        past_traj_NN = Trajectory([Node(list(ct2real(np.array(x),False))) for x in human.past_traj()])
+        past_traj_NN = TrajectoryNodeList([PathNode(list(ct2real(np.array(x),False))) for x in human.past_traj()])
         hypos_list = motion_predictor.get_motion_prediction(past_traj_NN, ref_map, PRED_OFFSET, SCALE2NN, batch_size=5)
         hypos_list_all = [np.concatenate((x,y), axis=0) for x,y in zip(hypos_list_all, hypos_list)]
     nn_time = timer() - start_time
@@ -240,7 +242,7 @@ for kt in range(MAX_SIM_TIME):
     for the_human in human_list:
         if the_human.get_next_goal(STIME, HUMAN_VMAX) is None:
             new_path_nx = scene_graph.NG.return_random_path(start_node_index=the_human.path[-1][2], num_traversed_nodes=3)
-            new_path = Path([Node(list(ct2real(np.array(x)))) for x in new_path_nx()])
+            new_path = PathNodeList([PathNode(list(ct2real(np.array(x)))) for x in new_path_nx()])
             the_human.set_path(new_path)
 
 plt.show()

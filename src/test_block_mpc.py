@@ -4,15 +4,15 @@ import pathlib
 
 import numpy as np
 
-from mpc_planner.util.config import Configurator
+from blk_mpc_planner.util_mpc.config import Configurator
 
-from mpc_planner.path_advisor.global_path_plan import GloablPathPlanner
-from mpc_planner.path_advisor.local_path_plan import LocalPathPlanner
-from mpc_planner.trajectory_generator import TrajectoryGenerator
+from blk_mpc_planner.path_advisor.global_path_plan import GloablPathPlanner
+from blk_mpc_planner.path_advisor.local_path_plan import LocalPathPlanner
+from blk_mpc_planner.trajectory_generator import TrajectoryGenerator
 
-from mpc_planner.scenario_simulator import Simulator
-from mpc_planner.util import utils_plot
-from util.basic_objclass import *
+from blk_mpc_planner.scenario_simulator import Simulator
+from blk_mpc_planner.util_mpc import utils_plot
+from blk_util.basic_object import *
 
 '''
 File info:

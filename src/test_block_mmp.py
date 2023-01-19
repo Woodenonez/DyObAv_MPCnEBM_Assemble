@@ -8,15 +8,15 @@ from matplotlib import patches
 import torch
 import torchvision
 
-from motion_prediction.net_module.net import ConvMultiHypoNet, ConvMixtureDensityNet
-from motion_prediction.data_handle import data_handler as dh
-from motion_prediction.data_handle import dataset as ds
+from blk_motion_prediction.net_module.net import ConvMultiHypoNet, ConvMixtureDensityNet
+from blk_motion_prediction._data_handle_mmp import data_handler as dh
+from blk_motion_prediction._data_handle_mmp import dataset as ds
 
-from motion_prediction.util import utils_test
-from motion_prediction.util import zfilter
-from motion_prediction.util import utils_np
+from blk_motion_prediction.util_mp import utils_test
+from blk_motion_prediction.util_mp import zfilter
+from blk_motion_prediction.util_mp import utils_np
 
-import motion_prediction.pre_load as pre_load
+import blk_motion_prediction.pre_load as pre_load
 
 print("Program: animation\n")
 

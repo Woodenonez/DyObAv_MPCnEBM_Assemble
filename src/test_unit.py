@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 #%% Test geometric map
-from util import mapnet
+from blk_basic_map import mapnet
 from main_pre import prepare_map
 
 ROBOT_SIZE = 0.5
@@ -29,8 +29,8 @@ plt.show()
 sys.exit(0)
 
 #%% Test datatype
-from util.utils_sl import read_pgm_and_process
-from util.basic_objclass import OccupancyMap, GeometricMap
+from blk_util.utils_sl import read_pgm_and_process
+from blk_util.basic_object import OccupancyMap, GeometricMap
 ### Load map
 ROOT_DIR = pathlib.Path(__file__).resolve().parents[1]
 map_path     = os.path.join(ROOT_DIR, 'data', 'warehouse_sim_original', 'mymap.pgm') # bookstore_sim_original, warehouse_sim_original
@@ -59,8 +59,8 @@ plt.show()
 sys.exit(0)
 
 #%% Test agents in agent.py
-from util.basic_agent import MovingAgent
-from util.mapnet import SceneGraph
+from blk_util.basic_agent import MovingAgent
+from blk_basic_map.mapnet import SceneGraph
 
 sgraph = SceneGraph('bookstore')
 
@@ -91,8 +91,8 @@ obj.run(path, ts, vmax)
 #%% Test planners in agent.py
 import numpy as np
 import matplotlib.pyplot as plt
-from util.basic_agent import Planner, lineseg_dists
-from util.mapnet import SceneGraph
+from blk_util.basic_agent import Planner, lineseg_dists
+from blk_basic_map.mapnet import SceneGraph
 sgraph = SceneGraph('bookstore')
 
 planner = Planner(sgraph.NG)
