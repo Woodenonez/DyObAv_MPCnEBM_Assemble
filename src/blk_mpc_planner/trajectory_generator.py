@@ -1,25 +1,27 @@
 import os, sys
 import math
 import itertools
-from typing import Callable, Tuple, Union
+from typing import Callable, Tuple, Union, List
 
 import numpy as np
+import opengen as og
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.gridspec import GridSpec
 
-from blk_mpc_planner.mpc.mpc_generator import MpcModule
+from blk_mpc_planner.pkg_mpc.mpc_generator import MpcModule
 from blk_mpc_planner.util_mpc.config import Configurator
-from blk_mpc_planner.obstacle_scanner.dynamic_obstacle_scanner import ObstacleScanner
 
-import blk_util.robot_dynamics as robot_dynamics
+from blk_util import model_kinematics
 from blk_util import utils_geo
-from blk_util.basic_datatype import *
+from std_message.msgs_motionplan import PathNode, PathNodeList, TrajectoryNode, TrajectoryNodeList
 from matplotlib.axes import Axes
+from fty_interface.abcs_obstacle import BasicObstacleScanner
+from fty_interface.abcs_map_graph import BasicGeometricMap
 # from 
 
-'''
+"""
 File info:
     Ref     - [Trajectory generation for mobile robotsin a dynamic environment using nonlinear model predictive control, CASE2021]
             - [https://github.com/wljungbergh/mpc-trajectory-generator]
@@ -31,26 +33,31 @@ File content:
 Comments:
                                                                                       V [MPC] V
     [GPP] --global path & static obstacles--> [LPP] --refernece path & tube width--> [TG(Config)] <--dynamic obstacles-- [OS]
-'''
+"""
 
-MAX_RUNNING_TIME_MS = 100_000 # ms
+MAX_RUNNING_TIME_MS = 100_000 # ms # TODO make it a param
+
+class Solver(): # helper class, this is not found in the .so file
+    def run(self, p:list, initial_guess, initial_lagrange_multipliers, initial_penalty) \
+            -> og.opengen.tcp.solver_status.SolverStatus: 
+        pass
 
 class TrajectoryGenerator:
-    '''
+    """
     Description:
-        :Generate a smooth trajectory based on the reference path and obstacle information.
-        :Use a configuration specified by 'utils/config'
-    Arguments:
-        :config  <Configurator> - A dictionary in the dot form contains all information/parameters needed.
-        :verbose <bool>         - If true, show verbose.
-    Attributes:
-        :__prtname     <str>     - The name to print while running this class.
-        :config   <Configurator> - As above mentioned.
-    Functions
-        :run <run>  - Run.
+        Generate a smooth trajectory based on the reference path and obstacle information.
+        Use a configuration specified by a Configuration object.
+    Args:
+        config: A dictionary in the dot form contains all information/parameters needed.
+        verbose: If true, show verbose.
+    Attrs:
+        __prtname: The name to print while running this class.
+        config: As above mentioned.
+    Funcs:
+        run: Run.
     Comments:
-        :Have fun but may need to modify the dynamic obstacle part.
-    '''
+        Have fun but may need to modify the dynamic obstacle part.
+    """
     def __init__(self, config:Configurator, build:bool=False, use_tcp:bool=False, verbose=False):
         self.__prtname = '[Traj]'
         self.vb = verbose
@@ -71,7 +78,6 @@ class TrajectoryGenerator:
             MpcModule(self.config).build(self.motion_model, use_tcp=use_tcp)
         solver_path = os.path.join(root_dir, self.config.build_directory, self.config.optimizer_name)
 
-        import opengen as og
         if not use_tcp:
             sys.path.append(solver_path)
             built_solver = __import__(self.config.optimizer_name) # it loads a .so (shared library object)
@@ -81,11 +87,11 @@ class TrajectoryGenerator:
             self.mng.start()
             self.mng.ping() # ensure RUST solver is up and runnings
 
-    def __load_robot_dynamics(self) -> Callable[[SamplingTime, NumpyState, NumpyAction], NumpyState]:
-        self.motion_model = robot_dynamics.kinematics_rk4
+    def __load_robot_dynamics(self) -> Callable[..., np.ndarray]:
+        self.motion_model = model_kinematics.kinematics_rk4
         return self.motion_model
 
-    def load_init_states(self, current_state:NumpyState, next_goal_state:NumpyState, final_goal_state:NumpyState):
+    def load_init_states(self, current_state:np.ndarray, next_goal_state:np.ndarray, final_goal_state:np.ndarray):
         if (not isinstance(current_state, np.ndarray)) or (not isinstance(next_goal_state, np.ndarray)) or (not isinstance(final_goal_state, np.ndarray)):
             raise TypeError(f'State and action should be numpy.ndarry, got {type(current_state)}/{type(next_goal_state)}/{type(final_goal_state)}.')
         self.state = current_state
@@ -111,12 +117,12 @@ class TrajectoryGenerator:
         else:
             raise TypeError(f'Unsupported datatype for obstacle weights, got {type(dyn_weights)}.')
 
-    def set_current_state(self, current_state:NumpyState):
+    def set_current_state(self, current_state:np.ndarray):
         if not isinstance(current_state, np.ndarray):
             raise TypeError(f'State should be numpy.ndarry, got {type(current_state)}.')
         self.state = current_state
 
-    def set_next_goal(self, next_goal_state:NumpyState):
+    def set_next_goal(self, next_goal_state:np.ndarray):
         if not isinstance(next_goal_state, np.ndarray):
             raise TypeError(f'State should be numpy.ndarry, got {type(next_goal_state)}.')
         self.next_goal = next_goal_state
@@ -146,7 +152,7 @@ class TrajectoryGenerator:
             else:
                 raise ModuleNotFoundError(f'There is no mode called {mode}.')
 
-    def check_termination_condition(self, state:NumpyState, action:NumpyAction, final_goal:NumpyState) -> bool:
+    def check_termination_condition(self, state:np.ndarray, action:np.ndarray, final_goal:np.ndarray) -> bool:
         if np.allclose(state[:2], final_goal[:2], atol=0.05, rtol=0) and abs(action[0]) < 0.05:
             terminated = True
             print(f"{self.__prtname} MPC solution found.")
@@ -155,17 +161,17 @@ class TrajectoryGenerator:
         return terminated
 
 
-    def get_ref_traj(self, ts:SamplingTime, reference_path:List[list], current_state:State) -> List[State]:
-        '''
+    def get_ref_traj(self, ts:float, reference_path:PathNodeList, current_state:np.ndarray) -> TrajectoryNodeList:
+        """
         Description:
             Generate the reference trajectory from the reference path. Start from the current position
-        Return:
-            ref_traj <list> - List of x, y coordinates and the heading angles
-        '''
+        Returns:
+            ref_traj: List of x, y coordinates and the heading angles
+        """
         x, y = current_state[0], current_state[1]
         x_next, y_next = reference_path[0][0], reference_path[0][1]
         
-        ref_traj = []
+        ref_traj = TrajectoryNodeList([])
         path_idx = 0
         traveling = True
         while(traveling):# for n in range(N):
@@ -192,24 +198,25 @@ class TrajectoryGenerator:
                     else:
                         x_next, y_next = reference_path[path_idx][0], reference_path[path_idx][1]
             if not dist_to_next < 1e-9:
-                ref_traj.append((x, y, math.atan2(y_dir,x_dir)))
+                ref_traj.append(TrajectoryNode(x, y, math.atan2(y_dir,x_dir)))
         return ref_traj
         
 
-    def run(self, ref_traj:list, start:NumpyState, end:NumpyState, map_manager, obstacle_scanner:ObstacleScanner, mode:str='work', plot_in_loop=False):
-        '''
+    def run(self, ref_traj:TrajectoryNodeList, start:np.ndarray, end:np.ndarray, map_manager:BasicGeometricMap, 
+            obstacle_scanner:BasicObstacleScanner, mode:str='work', plot_in_loop=False):
+        """
         Description:
             Run the trajectory planner.
-        Arguments:
-            ref_traj  <list of tuples> - Reference path
-            start     <tuple> - The start state
-            end       <tuple> - The end state
-        Return:
-            past_states          <list> - 
-            past_actions         <list> - 
-            cost_timelist        <list> - 
-            solver_time_timelist <list> - 
-        '''
+        Args:
+            ref_traj: Reference path
+            start: The start state
+            end: The end state
+        Returns:
+            past_states:
+            past_actions:
+            cost_timelist:
+            solver_time_timelist:
+        """
         ### Prepare for the loop computing ###
         self.load_init_states(start, end, end)
         stc_constraints = [0.0] * self.config.Nstcobs * self.config.nstcobs
@@ -255,7 +262,7 @@ class TrajectoryGenerator:
 
         return self.past_states, self.past_actions, self.cost_timelist, self.solver_time_timelist
 
-    def run_step(self, idx_ref, stc_constraints:list, dyn_constraints:list, ref_traj:list, mode:str='safe'):
+    def run_step(self, idx_ref, stc_constraints:list, dyn_constraints:list, ref_traj:TrajectoryNodeList, mode:str='safe'):
         '''
         TODO: Get rid of idx_ref
 
@@ -263,9 +270,9 @@ class TrajectoryGenerator:
             Run the trajectory planner for one step.
         '''
         ### Prepare for the computing ###
-        x_ref     = np.array(ref_traj)[:,0].tolist()
-        y_ref     = np.array(ref_traj)[:,1].tolist()
-        theta_ref = np.array(ref_traj)[:,2].tolist()
+        x_ref     = ref_traj.numpy()[:,0].tolist()
+        y_ref     = ref_traj.numpy()[:,1].tolist()
+        theta_ref = ref_traj.numpy()[:,2].tolist()
 
         ### Mode selection
         if mode == 'aligning':
@@ -331,7 +338,7 @@ class TrajectoryGenerator:
 
         return actions, pred_states, idx_next, cost, current_refs
 
-    def run_solver(self, parameters:list, state:NumpyState, take_steps:int=1):
+    def run_solver(self, parameters:list, state:np.ndarray, take_steps:int=1):
         '''
         Description:
             Run the solver for the pre-defined MPC problem.
@@ -377,7 +384,7 @@ class TrajectoryGenerator:
         actions = [np.array(action) for action in actions]
         return taken_states, pred_states, actions, cost, solver_time, exit_status
 
-    def run_solver_tcp(self, parameters:list, state:NumpyState, take_steps:int=1):
+    def run_solver_tcp(self, parameters:list, state:np.ndarray, take_steps:int=1):
         solution = self.mng.call(parameters)
         if solution.is_ok():
             # Solver returned a solution
@@ -411,7 +418,7 @@ class TrajectoryGenerator:
         return taken_states, pred_states, actions, cost, solver_time, exit_status
 
 
-    def plot_in_loop_pre(self, map_manager, ref_traj, start, end):
+    def plot_in_loop_pre(self, map_manager:BasicGeometricMap, ref_traj:TrajectoryNodeList, start, end):
         fig = plt.figure(constrained_layout=True)
         gs = GridSpec(3, 4, figure=fig)
 
@@ -432,7 +439,7 @@ class TrajectoryGenerator:
 
         path_ax = fig.add_subplot(gs[:, 2:])
         map_manager.plot_map(path_ax)
-        path_ax.plot(np.array(ref_traj)[:,0], np.array(ref_traj)[:,1], 'k--', label='Ref path')
+        path_ax.plot(ref_traj.numpy()[:,0], ref_traj.numpy()[:,1], 'k--', label='Ref path')
         path_ax.plot(start[0], start[1], marker='*', color='g', markersize=15, label='Start')
         path_ax.plot(end[0], end[1], marker='*', color='r', markersize=15, label='End')
         path_ax.arrow(start[0], start[1], math.cos(start[2]), math.sin(start[2]), head_width=0.05, head_length=0.1, fc='k', ec='k')

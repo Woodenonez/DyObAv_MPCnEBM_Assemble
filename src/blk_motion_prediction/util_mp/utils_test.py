@@ -13,6 +13,30 @@ import matplotlib.patches as patches
 # from data_handle import sid_object
 from blk_motion_prediction.util_mp import zfilter
 
+def plot_on_ref(axes, ref, traj, label, e_grid, prob_map, samlpes):
+    ax1, ax2, ax3 = axes
+    ax1.imshow(ref, cmap='gray')
+    ax1.plot(traj[:-1,0], traj[:-1,1], 'm.') # past
+    ax1.plot(label[:,0], label[:,1], 'ro', label="ground truth")
+    ax1.legend()
+    ax1.legend(prop={'size': 14}, loc='upper right')
+    ax1.set_aspect('equal', 'box')
+
+    ax2.imshow(e_grid, cmap='gray')
+    ax2.plot(traj[-1,0], traj[-1,1], 'ko', label='current')
+    ax2.plot(traj[:-1,0], traj[:-1,1], 'k.') # past
+    ax2.plot(label[:,0], label[:,1], 'rx', label="ground truth")
+    ax2.plot(samlpes[0,-1,:,0], samlpes[0,-1,:,1], 'g.')
+
+    ax3.imshow(prob_map, cmap='hot')
+    ax3.plot(traj[-1,0], traj[-1,1], 'ko', label='current')
+    ax3.plot(traj[:-1,0], traj[:-1,1], 'k.') # past
+    ax3.plot(label[:,0], label[:,1], 'rx', label="ground truth")
+
+    ax1.set_title('Real world')
+    ax2.set_title('Energy grid')
+    ax3.set_title('Probability map')
+    
 def kernel_Gaussian(X, Mu=[0,0], Sigma=[[0.05,0],[0,0.05]]):
     X = np.array(X).reshape(-1,1)
     Mu = np.array(Mu).reshape(-1,1)
@@ -179,10 +203,11 @@ def plot_KF(ax, X, P, nsigma=3):
     ax.plot(X[0], X[1], 'mo', label='KF')
     ax.add_patch(patches.Ellipse(X[:2], nsigma*P[0,0], nsigma*P[1,1], fc='g', zorder=0))
 
-def plot_Gaussian_ellipses(ax, mu_list, std_list, alpha=None, label=None, color='y'):
-    for mu, std in zip(mu_list, std_list):
-        patch = patches.Ellipse(mu, std[0], std[1], fc=color, ec='purple', alpha=alpha, label=label)
+def plot_Gaussian_ellipses(ax, mu_list, std_list, conf_list, factor=1, expand=0, alpha:float=None, label:str=None):
+    for mu, std, conf in zip(mu_list, std_list, conf_list):
+        patch = patches.Ellipse(mu, std[0]*factor+expand, std[1]*factor+expand, fc='y', ec='purple', alpha=alpha, label=label)
         ax.add_patch(patch)
+        ax.text(mu[0], mu[1], conf)
 
 def plot_mdn_output(ax, alpha, mu, sigma):
     ax.plot(mu[0,0], mu[0,1], 'ro', label='est')

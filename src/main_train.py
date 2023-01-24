@@ -3,8 +3,8 @@ from pathlib import Path
 
 import torchvision
 
-from blk_motion_prediction.net_module import loss_functions as loss_func
-from blk_motion_prediction.net_module.net import UNetPlain, UNetPos, E3Net
+from blk_motion_prediction.pkg_net_module import loss_functions as loss_func
+from blk_motion_prediction.pkg_net_module.net import UNetPlain, UNetPos, E3Net
 from blk_motion_prediction._data_handle_mmp import data_handler as dh
 
 import blk_motion_prediction.pre_load as pre_load

@@ -1,4 +1,3 @@
-import pathlib
 from typing import List
 
 import numpy as np
@@ -8,15 +7,11 @@ import torchvision
 import blk_motion_prediction.pre_load as pre_load
 from blk_motion_prediction.util_mp import utils_np
 from blk_motion_prediction._data_handle_mmp import data_handler
-from blk_motion_prediction.net_module.net import UNetPos
-
-from blk_util.basic_datatype import *
-
-ROOT_DIR = pathlib.Path(__file__).resolve().parents[2]
+from blk_motion_prediction.pkg_net_module.net import UNetPos
 
 class MmpInterface:
-    def __init__(self, config_file_name:str):
-        self.net = pre_load.load_net(ROOT_DIR, config_file_name, Net=UNetPos)
+    def __init__(self, root_dir, config_file_name:str):
+        self.net = pre_load.load_net(root_dir, config_file_name, Net=UNetPos)
 
     def get_motion_prediction(self, input_traj:List[tuple], ref_image:np.ndarray, pred_offset:int, rescale:float=1.0, batch_size:int=1):
         if input_traj is None:
@@ -31,7 +26,7 @@ class MmpInterface:
         input_ = pre_load.traj_to_input(input_traj, ref_image=ref_image, transform=transform)
         
         hypos_list:List[np.ndarray] = []
-        # XXX
+        # XXX Batch inference
         input_all = input_.unsqueeze(0)
         for offset in range(1, pred_offset+1):
             input_[-1,:,:] = offset*torch.ones_like(input_[-1,:,:])

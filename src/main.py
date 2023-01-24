@@ -1,23 +1,25 @@
 import os
 import sys
-import copy
+import math
 import pathlib
 from timeit import default_timer as timer
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-from blk_mpc_planner.util_mpc import utils_plot
 
 from main_pre import prepare_map, prepare_params
 from blk_motion_prediction.mmp_interface import MmpInterface
 from blk_motion_prediction.util_mp import utils_test
+
+from blk_mpc_planner.util_mpc import utils_plot
 from blk_mpc_planner.mpc_interface import MpcInterface
 
-from blk_basic_map import mapnet
-from blk_util import basic_agent
 from blk_util import utils_geo
-from blk_util.basic_object import *
+from blk_agent import basic_agent
+from blk_basic_map.graph_scene import SceneGraph
+from blk_path_plan.pkg_path_plan_graph.dijkstra import DijkstraPlanner 
+from std_message.msgs_motionplan import PathNode, PathNodeList, TrajectoryNode, TrajectoryNodeList
 
 MAX_SIM_TIME = 1_000
 
@@ -27,8 +29,8 @@ CONFIG_FILE = 'global_setting_assemble.yml'
 
 ROBOT_START_POINT = np.array([160, 210, math.pi/2]) # XXX Sim world coords
 
-HUMAN_A_START = np.array([110, 20])  # XXX Sim world coords
-HUMAN_B_START = np.array([160, 20]) # XXX Sim world coords
+HUMAN_A_START = np.array([110, 20, 0])  # XXX Sim world coords
+HUMAN_B_START = np.array([160, 20, 0]) # XXX Sim world coords
 
 ### Global load
 ROOT_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -66,22 +68,25 @@ HUMAN_B_START = ct2real(HUMAN_B_START)
 the_map, ref_map = prepare_map(SCENE, ROOT_DIR, inversed_pixel=True)
 
 ### Load scene, humans, robot, and planner (just for local simulation)
-map_info = {'map_image':the_map, 'threshold':120}
-scene_graph = mapnet.SceneGraph(scene=SCENE, map_type='occupancy', map_info=map_info)
-the_planner = basic_agent.Planner(scene_graph.NG)
+# map_info = {'map_image':the_map, 'threshold':120}
+# scene_graph = mapnet.SceneGraph(scene=SCENE, map_type='occupancy', map_info=map_info)
+map_info = {'boundary':the_map['helper'][0], 'obstacle_list':the_map['obstacle'], 'inflation':0.5}
+scene_graph = SceneGraph(scene=SCENE, map_type='geometric', map_info=map_info)
+
+the_planner = DijkstraPlanner(scene_graph.NG)
 human_a = basic_agent.Human(HUMAN_A_START, radius=HUMAN_SIZE, stagger=HUMAN_STAGGER)
 human_b = basic_agent.Human(HUMAN_B_START, radius=HUMAN_SIZE, stagger=HUMAN_STAGGER)
 human_list = [human_a, human_b]
 # human_list = [human_a]
 # human_list = [human_b]
 
-path_nx_a = scene_graph.NG.return_given_path([1, 2, 9, 10, 14])
-path_nx_b = scene_graph.NG.return_given_path([8, 32, 16])
+path_nx_a = scene_graph.NG.return_given_path([16, 1, 3, 5])
+path_nx_b = scene_graph.NG.return_given_path([10, 6, 5, 7, 1])
 path_nx_list = [path_nx_a, path_nx_b]
 # path_nx_list = [path_nx_a]
 # path_nx_list = [path_nx_b]
 
-path_list = [PathNodeList([PathNode(list(ct2real(np.array(x)))) for x in path_nx()]) for path_nx in path_nx_list]
+path_list = [PathNodeList([PathNode(ct2real(x)) for x in path_nx()]) for path_nx in path_nx_list]
 for the_human, the_path in zip(human_list, path_list):
     the_human.set_path(the_path)
 

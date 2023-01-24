@@ -5,6 +5,44 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image, ImageFilter
 import casadi as cs
+import networkx as nx
+from blk_agent import basic_agent
+from std_message.msgs_motionplan import PathNode, PathNodeList
+from abc import abstractmethod, ABCMeta
+
+class A(metaclass=ABCMeta):
+    @property
+    @abstractmethod
+    def p_a(self):
+        pass
+
+class B(A):
+    def __init__(self) -> None:
+        super().__init__()
+        self.p_a = 1
+    def p_b(self, inb=1):
+        pass
+
+b = B()
+
+sys.exit(0)
+
+class NetGraph:
+    """Interactive interface with networkx library."""
+    def __init__(self):
+        self._position_key = 'position'
+
+    @property
+    def position_key(self):
+        return self._position_key
+
+G = NetGraph()
+print(G.position_key)
+
+# a = basic_agent.MovingAgent(np.array((0,0,0)), 1, 0)
+# a.set_path(PathNodeList([PathNode(0,0), PathNode(0,1)]))
+
+sys.exit(0)
 
 ### Generate random convex polygons
 #Ref: Probability that n random points are in convex position (1994)

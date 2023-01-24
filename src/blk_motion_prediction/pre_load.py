@@ -50,12 +50,12 @@ def load_path(param, root_dir):
     return save_path, csv_path, data_dir
 
 def load_data(param, paths, transform, num_workers=0, T_range=None, ref_image_name=None, image_ext='png'):
-    myDS = ds.ImageStackDataset(csv_path=paths[1], root_dir=paths[2], transform=transform,
+    dataset = ds.ImageStackDataset(csv_path=paths[1], root_dir=paths[2], transform=transform,
                                 pred_offset_range=T_range, ref_image_name=ref_image_name, image_ext=image_ext)
-    myDH = dh.DataHandler(myDS, batch_size=param['batch_size'], num_workers=num_workers)
-    print(f'{__PRT_NAME} Data prepared. #Samples(training, val):{myDH.get_num_data()}, #Batches:{myDH.get_num_batch()}')
-    print(f'{__PRT_NAME} Sample (shape): \'image\':',myDS[0]['input'].shape,'\'label\':',myDS[0]['target'].shape)
-    return myDS, myDH
+    data_handler = dh.DataHandler(dataset, batch_size=param['batch_size'], num_workers=num_workers)
+    print(f'{__PRT_NAME} Data prepared. #Samples(training, val):{data_handler.get_num_data()}, #Batches:{data_handler.get_num_batch()}')
+    print(f'{__PRT_NAME} Sample (shape): \'image\':',dataset[0]['input'].shape,'\'label\':',dataset[0]['target'].shape)
+    return dataset, data_handler
 
 def load_manager(param, Net:torch.nn.Module, loss:dict, encoder_channels=None, decoder_channels=None, verbose=True):
     if (encoder_channels is not None) & (decoder_channels is not None):
@@ -65,9 +65,9 @@ def load_manager(param, Net:torch.nn.Module, loss:dict, encoder_channels=None, d
         # de_chs = en_chs[::-1]             # XXX
     else:
         net = Net(param['input_channel'], num_classes=param['pred_len'], ) # in, out channels
-    myNet = NetworkManager(net, loss, training_parameter=param, device=param['device'], verbose=verbose)
-    myNet.build_Network()
-    return myNet
+    net_manager = NetworkManager(net, loss, training_parameter=param, device=param['device'], verbose=verbose)
+    net_manager.build_Network()
+    return net_manager
 
 def save_profile(manager:NetworkManager, save_path:str='./'): # NOTE optional
     dt = datetime.now().strftime("%d_%m_%Y__%H_%M_%S")
@@ -90,40 +90,48 @@ def main_train(root_dir, config_file, transform, Net:torch.nn.Module, loss:dict,
         
     paths = load_path(param, root_dir)
     _, myDH = load_data(param, paths, transform, num_workers, T_range, ref_image_name, image_ext)
-    myNet = load_manager(param, Net, loss)
+    net_manager = load_manager(param, Net, loss)
 
     ### Training
     start_time = time.time()
-    myNet.train(myDH, myDH, param['batch_size'], param['epoch'], runon=runon)
+    net_manager.train(myDH, myDH, param['batch_size'], param['epoch'], runon=runon)
     total_time = round((time.time()-start_time)/3600, 4)
-    if (paths[0] is not None) & myNet.complete:
-        torch.save(myNet.model.state_dict(), paths[0])
-    nparams = sum(p.numel() for p in myNet.model.parameters() if p.requires_grad)
+    if (paths[0] is not None) & net_manager.complete:
+        torch.save(net_manager.model.state_dict(), paths[0])
+    nparams = sum(p.numel() for p in net_manager.model.parameters() if p.requires_grad)
     print(f'\n{__PRT_NAME} Training done: {nparams} parameters. Cost time: {total_time}h.')
 
-    save_profile(myNet)
+    save_profile(net_manager)
 
-def load_net(root_dir, config_file, Net):
+def load_net(root_dir, config_file, Net: torch.nn.Module) -> NetworkManager:
+    """
+    Args:
+        root_dir: Root directory of the project (with folders like data/, Model/, ...).
+        config_file: Name of the config file.
+        Net: Neural network module.
+    Returns:
+        net_manager: Neural network manager.
+    """
     param = load_param(root_dir, config_file)
     paths = load_path(param, root_dir)
-    myNet = load_manager(param, Net, {})
-    myNet.build_Network()
-    myNet.model.load_state_dict(torch.load(paths[0]))
-    myNet.model.eval() # with BN layer, must run eval first
-    return myNet
+    net_manager = load_manager(param, Net, {})
+    net_manager.build_Network()
+    net_manager.model.load_state_dict(torch.load(paths[0]))
+    net_manager.model.eval() # with BN layer, must run eval first
+    return net_manager
 
 def main_test_pre(root_dir, config_file, transform, Net:torch.nn.Module, ref_image_name:str=None, verbose=False):
     ### Check and load
     param = load_param(root_dir, config_file)
     paths = load_path(param, root_dir)
-    myDS, myDH = load_data(param, paths, transform, ref_image_name=ref_image_name)
+    dataset, data_handler = load_data(param, paths, transform, ref_image_name=ref_image_name)
     if Net is not None:
-        myNet = load_manager(param, Net, {})
-        myNet.model.load_state_dict(torch.load(paths[0]))
-        myNet.model.eval() # with BN layer, must run eval first
+        net_manager = load_manager(param, Net, {})
+        net_manager.model.load_state_dict(torch.load(paths[0]))
+        net_manager.model.eval() # with BN layer, must run eval first
     else:
-        myNet = None
-    return myDS, myDH, myNet
+        net_manager = None
+    return dataset, data_handler, net_manager
 
 def main_test(dataset:ds.ImageStackDataset, net_manager:NetworkManager, idx:int):
     img:torch.Tensor   = dataset[idx]['input']  # originally np.ndarray

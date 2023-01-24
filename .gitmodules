@@ -1,0 +1,3 @@
+[submodule "src/blk_motion_prediction/_data_handle_mmp"]
+	path = src/blk_motion_prediction/_data_handle_mmp
+	url = https://github.com/Woodenonez/_data_handle_mmp
